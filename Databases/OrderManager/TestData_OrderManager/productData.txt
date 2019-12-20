@@ -1,0 +1,12 @@
+AB-123456-BA	Bose	Sound Producer	4	125.12
+IP-341597-A7	iPhone	Communicator	6	352.6
+XB-427841-0N	xBox	Joy Box	2	523.65
+DX-696942-6N	Flip-Flops	Foot Device	20	10
+BG-420420-HP	Hula Hoop	Large Ring	10	5.69
+RD-472046-3D	Glasses	Sight Enhancer	5	65.6
+JK-106629-J9	Guitar	Music Maker	3	299.99
+TP-854301-C6	Toothpaste	Oral Hygiene	7	8.99
+SK-670394-T2	Deodorant	Smell Eliminator	8	6.88
+CA-107926-CT	Carrot	Vegetable	1	1.99
+A1-214FCB-R4	Razer Laptop	Gaming Laptop	2	499.99
+RG-548910-H1	Samsung TV	65-Inch 4K UHD OLED	4	-25.33

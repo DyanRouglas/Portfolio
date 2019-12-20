@@ -1,0 +1,11 @@
+Helen	Jones	3374  Walnut Hill Drive	San Jose	CA	United States	12345
+Alexis	Oliver	343 Nice Avenue	Dogtown	CA	United States	54321
+Chet	Manly	1070  Quincy Street	Seattle	WA	United States	17401
+Debbie	Coleman	2774  Calvin Street	Baltimore	MD	United States	21201
+Jacquelyn	Collett	123 ABC Court	Bavaria	MN	United States	87412
+Max	Steel	4273  Sycamore Circle	Gainesville	GA	United States	30501
+Dyan	Rouglas	789 Cool Street	Petaluma	CA	United States	69420
+Gus	Cowboy	2796  Patriot Avenue	Anson	TX	United States	79501
+Ringo	Starr	52 Sunset Boulevard	Los Angeles	CA	United States	90046
+Olga	Smith	4917  Hamilton Drive	Alden	NY	United States	14004
+Paul	McCartney	452 Penny Lane	Liverpool	GB	United Kingdom	45230
