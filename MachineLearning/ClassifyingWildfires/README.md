@@ -6,3 +6,5 @@ The Jupyter Notebook, Classifying_CA_Wildfires.ipynb, contains 5 sections:
   3. Feature Engineering: The creation of various new features to be used in the models
   4. Labeling the Fire Size Class: Testing of various models to see which features are the most predictive and which models have the highest AUC for classifying fire size.
   5. Classifying the Cause of Fires: Testing of various models to see which features are the most predictive and which models have the highest AUC for classifying the cause of fires.
+  
+The wildfire dataset used for this project can be found here https://www.kaggle.com/rtatman/188-million-us-wildfires
