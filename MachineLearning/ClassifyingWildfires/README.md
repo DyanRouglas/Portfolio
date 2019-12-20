@@ -1,3 +1,4 @@
+## Classifying Wildfires
 For my data mining class, we were given the freedom to select a topic for our final project that allowed us to demonstrate a variety of the skills and techniques we used throughout the semester.
 Given the increase in both the duration and frequency of wildfires and because I grew up and have spent most of my life in California, I decided to make classifying the size and cause of California wildfires the primary topic of my final project.
 The Jupyter Notebook, Classifying_CA_Wildfires.ipynb, contains 5 sections:
