@@ -1,0 +1,1234 @@
+---
+title: "HRVAnalysis_Kubios"
+author: "Ryan Douglas"
+date: "3/31/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+library(readxl)
+library(lme4)
+```
+
+```{r}
+hrv <- read.csv("/Users/DyanRouglas/Documents/Yale_data/Kubios/Kubios_refined.csv", stringsAsFactors = FALSE)
+clean <- read.csv("/Users/DyanRouglas/Documents/Yale_data/HRV/HRVCleaned.csv")
+drinking_info <- read_excel("/Users/DyanRouglas/Documents/Yale_data/MSD_MMK_Drinking_Categorization.xlsx", skip = 1)
+
+colnames(hrv)[which(names(hrv) == "MMID")] <- "SubjectID"
+colnames(hrv)[which(names(hrv) == "S1_Mean.HR..bpm.")] <- "HR"
+colnames(hrv)[which(names(hrv) == "S1_SDNN..ms.")] <- "SDNN"
+colnames(hrv)[which(names(hrv) == "S1_RMSSD..ms.")] <- "RMSSD"
+colnames(hrv)[which(names(hrv) == "S1_HFpow_FFT..ms2.")] <- "hf"
+colnames(hrv)[which(names(hrv) == "S1_LFpow_FFT..ms2.")] <- "lf"
+colnames(hrv)[which(names(hrv) == "S1_LF_HF_ratio_FFT")] <- "lfhf"
+colnames(hrv)[which(names(hrv) == "S1_HFpow_FFT..log.")] <- "hf_log"
+colnames(hrv)[which(names(hrv) == "S1_LFpow_FFT..log.")] <- "lf_log"
+colnames(hrv)[which(names(hrv) == "S1_HFpow_AR..ms2.")] <- "hfAR"
+colnames(hrv)[which(names(hrv) == "S1_LFpow_AR..ms2.")] <- "lfAR"
+colnames(hrv)[which(names(hrv) == "S1_HFpow_FFT....")] <- "hf.."
+colnames(hrv)[which(names(hrv) == "S1_LFpow_FFT....")] <- "lf.."
+
+
+
+
+# hrv$HR <- as.numeric(hrv$HR)
+# hrv$SDNN <- as.numeric(hrv$SDNN)
+# hrv$RMSSD <- as.numeric(hrv$RMSSD)
+# hrv$lfhf <- as.numeric(hrv$lfhf)
+# hrv$hf <- as.numeric(hrv$hf)
+```
+
+### Drink Group
+```{r}
+hrv$drinkGroup <- NA
+for (i in 1:nrow(hrv)) {
+  scan <- hrv$ScanID[i]
+  mmid <- hrv$SubjectID[grep(scan, hrv$ScanID)]
+  
+  if (grepl("MAD", mmid[1])) {
+    hrv$drinkGroup[i] <- "AD"
+    next
+  }
+  if (grepl("MSD", mmid[1])) {
+    hrv$drinkGroup[i] <- "LD"
+    next
+  }
+}
+```
+
+### Add Seungju's drinking information (Need to add AD drinking information)
+#```{r}
+### Need to figure out way to add more specific drinking information, while including AD individuals
+# hrv$drinkGroup <- NA
+# for (i in 1:nrow(hrv)) {
+#   scan <- hrv$ScanID[i]
+#   mmid <- hrv$SubjectID[grep(scan, hrv$ScanID)]
+#   
+#   if (grepl("MAD", mmid[1])) {
+#     hrv$drinkGroup[i] <- "AD"
+#     next
+#   }
+#   
+#   index <- grep(scan, drinking_info$`Scan ID`)
+#   if (is_empty(index)) {
+#     next
+#   }
+# 
+#   if (drinking_info$DC_9[index] <= 1.5) {
+#     hrv$drinkGroup[i] <- "LD"
+#     next
+#   }
+#   if (drinking_info$DC_9[index] >= 3) {
+#     hrv$drinkGroup[i] <- "HD"
+#     next
+#   }
+# 
+# }
+
+#```
+
+### Preprocessing to remove NAs, MMKTs, MMKDs, and only include BOLD pre scans ###
+```{r}
+bold <- filter(hrv, Scan == "BOLD")
+bold <- filter(bold, Condition != "NA")
+bold <- filter(bold, drinkGroup != "NA")
+bold <- filter(bold, HR != "NA")
+bold <- filter(bold, ScanType == "Pre Scan")
+bold <- filter(bold, HR < 100)
+#bold <- filter(bold, Respiration != "Inf")
+bold <- bold[!grepl("MMKT", bold$MMK),]
+bold <- bold[!grepl("MMKD", bold$MMK),]
+### Remove MSD079
+bold <- filter(bold, SubjectID != "MSD079")
+
+```
+
+### Get scan number and run type
+```{r}
+bold$run <- NA
+bold$run_type <- NA
+for (i in 1:nrow(bold)) {
+  run <- as.character(bold$scan[i])
+  run_type <- bold$Stim[i]
+  run_type <- substr(as.character(run_type), 0, 4)
+  bold$run[i] <- as.numeric(substr(run, 4, nchar(run)))
+  
+  if (is.na(run_type)) next
+  if (run_type == "Stim") {
+    bold$run_type[i] <- "Provocation"
+  } else {
+    bold$run_type[i] <- "Baseline"
+  }
+  
+}
+
+```
+
+### Filter to only include bold runs 1-9
+```{r}
+hrv.bold <- filter(bold, run <= 9)
+# Currently have too few HD participants with clean data for analysis
+#hrv.bold <- filter(hrv.bold, drinkGroup != "HD")
+
+### Relevel so that Neutral is base level
+hrv.bold$Condition <- factor(hrv.bold$Condition, ordered = FALSE)
+hrv.bold <- within(hrv.bold, Condition <- relevel(Condition, ref = "N"))
+
+# hrv.bold$drinkGroup <- factor(hrv.bold$drinkGroup, ordered = FALSE)
+# hrv.bold <- within(hrv.bold, drinkGroup <- relevel(drinkGroup, ref = "LD"))
+```
+
+### Provocation - Baseline
+```{r}
+hrv.bold$PB_HR <- NA
+hrv.bold$PB_SDNN <- NA
+hrv.bold$PB_RMSSD <- NA
+hrv.bold$PB_HF <- NA
+hrv.bold$PB_LF <- NA
+hrv.bold$PB_LFHF <- NA
+hrv.bold$PB_Stress <- NA
+hrv.bold$PB_Crav <- NA
+hrv.bold$PB_Arous <- NA
+hrv.bold$PB_Focus <- NA
+
+count <- 1
+
+for (i in 1:nrow(hrv.bold)) {
+  if (count > 1 && hrv.bold$ScanID[i] %in% hrv_bold$ScanID) {
+    next
+  }
+  
+  scanID <- hrv.bold$ScanID[i]
+  subject <- filter(hrv.bold, ScanID == scanID)
+  
+   # Divide each subject by condition
+  condition <- unique(subject$Condition)
+  cond1 <- filter(subject, Condition == condition[1])
+  cond2 <- filter(subject, Condition == condition[2])
+  cond3 <- filter(subject, Condition == condition[3])
+  
+  cond <- list(cond1, cond2, cond3)
+  
+  for (s in 1:length(cond)) {
+    if (nrow(cond[[s]]) == 0) {
+      next
+    }
+    
+    if (!("Baseline" %in% cond[[s]]$run_type) | !("Provocation" %in% cond[[s]]$run_type)) {
+      next
+    }
+    # if (length(grep("Baseline", cond[[s]]$run_type)) != 3 | length(grep("Provocation", cond[[s]]$run_type)) != 6) {
+    #   next
+    # }
+  
+    subjBaseline <- filter(cond[[s]], run_type == "Baseline")
+    subjBaseline$PB_HR <- rep(mean(subjBaseline$HR), nrow(subjBaseline))
+    subjBaseline$PB_SDNN <- rep(mean(subjBaseline$SDNN), nrow(subjBaseline))
+    subjBaseline$PB_RMSSD <- rep(mean(subjBaseline$RMSSD), nrow(subjBaseline))
+    subjBaseline$PB_HF <- rep(mean(subjBaseline$hf), nrow(subjBaseline))
+    subjBaseline$PB_LF <- rep(mean(subjBaseline$lf), nrow(subjBaseline))
+    subjBaseline$PB_LFHF <- rep(mean(subjBaseline$lfhf), nrow(subjBaseline))
+    subjBaseline$PB_Stress <- rep(mean(subjBaseline$Stress), nrow(subjBaseline))
+    subjBaseline$PB_Crav <- rep(mean(subjBaseline$Crav), nrow(subjBaseline))
+    subjBaseline$PB_Arous <- rep(mean(subjBaseline$Arous), nrow(subjBaseline))
+    subjBaseline$PB_Focus <- rep(mean(subjBaseline$Focus), nrow(subjBaseline))
+    
+    subjProvocation <- filter(cond[[s]], run_type == "Provocation")
+    subjProvocation$PB_HR <- rep(mean(subjProvocation$HR), nrow(subjProvocation))
+    subjProvocation$PB_SDNN <- rep(mean(subjProvocation$SDNN), nrow(subjProvocation))
+    subjProvocation$PB_RMSSD <- rep(mean(subjProvocation$RMSSD), nrow(subjProvocation))
+    subjProvocation$PB_HF <- rep(mean(subjProvocation$hf), nrow(subjProvocation))
+    subjProvocation$PB_LF <- rep(mean(subjProvocation$lf), nrow(subjProvocation))
+    subjProvocation$PB_LFHF <- rep(mean(subjProvocation$lfhf), nrow(subjProvocation))
+    subjProvocation$PB_Stress <- rep(mean(subjProvocation$Stress), nrow(subjProvocation))
+    subjProvocation$PB_Crav <- rep(mean(subjProvocation$Crav), nrow(subjProvocation))
+    subjProvocation$PB_Arous <- rep(mean(subjProvocation$Arous), nrow(subjProvocation))
+    subjProvocation$PB_Focus <- rep(mean(subjProvocation$Focus), nrow(subjProvocation))
+    
+    cond[[s]]$PB_HR <- rep((subjProvocation$PB_HR[1] - subjBaseline$PB_HR[1]), nrow(cond[[s]]))
+    cond[[s]]$PB_SDNN <- rep((subjProvocation$PB_SDNN[1] - subjBaseline$PB_SDNN[1]), nrow(cond[[s]]))
+    cond[[s]]$PB_RMSSD <- rep((subjProvocation$PB_RMSSD[1] - subjBaseline$PB_RMSSD[1]), nrow(cond[[s]]))
+    cond[[s]]$PB_HF <- rep((subjProvocation$PB_HF[1] - subjBaseline$PB_HF[1]), nrow(cond[[s]]))
+    cond[[s]]$PB_LF <- rep((subjProvocation$PB_LF[1] - subjBaseline$PB_LF[1]), nrow(cond[[s]]))
+    cond[[s]]$PB_LFHF <- rep((subjProvocation$PB_LFHF[1] - subjBaseline$PB_LFHF[1]), nrow(cond[[s]]))
+    cond[[s]]$PB_Stress <- rep((subjProvocation$PB_Stress[1] - subjBaseline$PB_Stress[1]), nrow(cond[[s]]))
+    cond[[s]]$PB_Crav <- rep((subjProvocation$PB_Crav[1] - subjBaseline$PB_Crav[1]), nrow(cond[[s]]))
+    cond[[s]]$PB_Arous <- rep((subjProvocation$PB_Arous[1] - subjBaseline$PB_Arous[1]), nrow(cond[[s]]))
+    cond[[s]]$PB_Focus <- rep((subjProvocation$PB_Focus[1] - subjBaseline$PB_Focus[1]), nrow(cond[[s]]))
+    
+    
+  }
+  # Recombine into single subject
+  subject_full <- rbind(cond[[1]], cond[[2]], cond[[3]])
+  
+  if (count == 1) {
+    hrv_bold <- subject_full
+  } else {
+    hrv_bold <- rbind(hrv_bold, subject_full)
+  }
+  count <- count + 1
+  
+ 
+}
+
+```
+
+### First 2 runs - Last 2 runs
+
+```{r}
+hrv.runs <- hrv_bold
+hrv.runs$flHR <- NA
+hrv.runs$minus2HR <- NA
+hrv.runs$flHF <- NA
+hrv.runs$minus2HF <- NA
+hrv.runs$flLF <- NA
+hrv.runs$minus2LF <- NA
+hrv.runs$flLFHF <- NA
+hrv.runs$minus2LFHF <- NA
+hrv.runs$flStress <- NA
+hrv.runs$minus2Stress <- NA
+hrv.runs$flCrav <- NA
+hrv.runs$minus2Crav <- NA
+hrv.runs$flArous <- NA
+hrv.runs$minus2Arous <- NA
+
+count <- 1
+for (i in 1:nrow(hrv.runs)) {
+  if (count > 1 && hrv.runs$ScanID[i] %in% HRV$ScanID) {
+    next
+  }
+  
+  scanID <- hrv.runs$ScanID[i]
+  subject <- filter(hrv.runs, ScanID == scanID)
+  
+   # Divide each subject by condition
+  condition <- unique(subject$Condition)
+  cond1 <- filter(subject, Condition == condition[1])
+  cond2 <- filter(subject, Condition == condition[2])
+  cond3 <- filter(subject, Condition == condition[3])
+  
+  cond <- list(cond1, cond2, cond3)
+  
+  for (s in 1:length(cond)) {
+    if (nrow(cond[[s]]) < 2) {
+      next
+    }
+    
+    if (!("Baseline" %in% cond[[s]]$run_type) | !("Provocation" %in% cond[[s]]$run_type)) {
+      next
+    }
+    
+    subjBaseline <- filter(cond[[s]], run_type == "Baseline")
+    subjProvocation <- filter(cond[[s]], run_type == "Provocation")
+    
+   if (!is.na(cond[[s]]$run[4]) && !is.na(cond[[s]]$run[9])) {
+     
+     if (cond[[s]]$run[4] == 4 && cond[[s]]$run[9] == 9) {
+       cond[[s]]$flHR <- rep(subjProvocation$HR[6] - subjProvocation$HR[1], nrow(cond[[s]]))
+       cond[[s]]$flHF <- rep(subjProvocation$hf[6] - subjProvocation$hf[1], nrow(cond[[s]]))
+       cond[[s]]$flLF <- rep(subjProvocation$lf[6] - subjProvocation$lf[1], nrow(cond[[s]]))
+       cond[[s]]$flLFHF <- rep(subjProvocation$lfhf[6] - subjProvocation$lfhf[1], nrow(cond[[s]]))
+      
+       cond[[s]]$flStress <- rep(subjProvocation$Stress[6] - subjProvocation$Stress[1], nrow(cond[[s]]))
+       cond[[s]]$flCrav <- rep(subjProvocation$Crav[6] - subjProvocation$Crav[1], nrow(cond[[s]]))
+       cond[[s]]$flArous <- rep(subjProvocation$Arous[6] - subjProvocation$Arous[1], nrow(cond[[s]]))
+       
+     }
+     
+   }
+
+    if (!is.na(cond[[s]]$run[1]) && !is.na(cond[[s]]$run[2]) && !is.na(cond[[s]]$run[8]) && !is.na(cond[[s]]$run[9])) {
+      
+      if (cond[[s]]$run[1] == 1 && cond[[s]]$run[2] == 2 && cond[[s]]$run[8] == 8 && cond[[s]]$run[9] == 9) {
+        cond[[s]]$minus2HR <- rep(mean(subjProvocation$HR[5:6]) - mean(subjBaseline$HR[1:2]), nrow(cond[[s]]))
+        cond[[s]]$minus2HF <- rep(mean(subjProvocation$hf[5:6]) - mean(subjBaseline$hf[1:2]), nrow(cond[[s]]))
+        cond[[s]]$minus2LF <- rep(mean(subjProvocation$lf[5:6]) - mean(subjBaseline$lf[1:2]), nrow(cond[[s]]))
+        cond[[s]]$minus2LFHF <- rep(mean(subjProvocation$lfhf[5:6]) - mean(subjBaseline$lfhf[1:2]), nrow(cond[[s]]))
+      
+        cond[[s]]$minus2Stress <- rep(mean(subjProvocation$Stress[5:6]) - mean(subjBaseline$Stress[1:2]), nrow(cond[[s]]))
+        cond[[s]]$minus2Crav <- rep(mean(subjProvocation$Crav[5:6]) - mean(subjBaseline$Crav[1:2]), nrow(cond[[s]]))
+        cond[[s]]$minus2Arous <- rep(mean(subjProvocation$Arous[5:6]) - mean(subjBaseline$Arous[1:2]), nrow(cond[[s]]))
+      }
+      
+    }
+    
+  }
+  
+  
+  
+  # Recombine into single subject
+  subject_full <- rbind(cond[[1]], cond[[2]], cond[[3]])
+  
+  if (count == 1) {
+    HRV <- subject_full
+  } else {
+    HRV <- rbind(HRV, subject_full)
+  }
+  count <- count + 1
+}
+hrv.runs <- HRV
+```
+
+#```{r}
+#hrv.runs <- bold[bold$ScanID %in% clean$ScanID,]
+#```
+
+### Demographic information ###
+
+```{r}
+
+subjectAgeMean <- group_by(hrv.runs, drinkGroup) %>%
+             summarise(Age = mean(Age, na.rm = TRUE))
+subjectAgeSD <- group_by(hrv.runs, drinkGroup) %>%
+             summarise(Age = sd(Age, na.rm = TRUE))
+
+subjectEducationMean <- group_by(hrv.runs, drinkGroup) %>%
+             summarise(Education = mean(Education, na.rm = TRUE))
+subjectEducationSD <- group_by(hrv.runs, drinkGroup) %>%
+             summarise(Education = sd(Education, na.rm = TRUE))
+
+subj <- unique(hrv.runs$SubjectID)
+MADmale <- 0
+MADfemale <- 0
+MSDmale <- 0
+MSDfemale <- 0
+for (i in 1:length(subj)) {
+  index <- grep(subj[i], hrv.runs$SubjectID)
+  
+  if (hrv.runs$drinkGroup[index[1]] == "AD") {
+    if (hrv.runs$Gender[index[1]] == "Male") {
+      MADmale <- MADmale + 1
+    } else {
+      MADfemale <- MADfemale + 1
+    }
+  } else {
+    if (hrv.runs$Gender[index[1]] == "Male") {
+      MSDmale <- MSDmale + 1
+    } else {
+      MSDfemale <- MSDfemale + 1
+    }
+  }
+}
+```
+
+
+### ANALYSIS OF HR ###
+
+```{r}
+#hrv.runs <- hrv.bold
+lmHR <- lm(HR ~ drinkGroup*Condition, hrv.runs)
+summary(lmHR)
+
+anovaHR <- aov(HR ~ drinkGroup*Condition, data = hrv.runs)
+summary(anovaHR)
+
+tukeyHR <- TukeyHSD(anovaHR)
+tukeyHR
+plot(tukeyHR)
+
+```
+
+```{r}
+ggplot(hrv.runs, aes(x = Condition, y = HR, color = drinkGroup)) +
+  geom_boxplot(outlier.color = "black") +
+  labs(title = "Heart Rate by Condition and Drink Group", y = "Heart Rate")
+ggplot(hrv.runs, aes(x = Condition, y = HR, color = Condition)) +
+  geom_boxplot(outlier.color = "black") +
+  labs(title = "Heart Rate by Condition", y = "Heart Rate")
+ggplot(hrv.runs, aes(x = drinkGroup, y = HR, color = drinkGroup)) +
+  geom_boxplot(outlier.color = "black") +
+  labs(title = "Heart Rate by Drink Group", y = "Heart Rate")
+```
+
+```{r}
+mean_data <- group_by(hrv.runs, drinkGroup, Condition, run) %>%
+             summarise(HR = mean(HR, na.rm = TRUE))
+
+strMean <- filter(mean_data, Condition == "S")
+alcMean <- filter(mean_data, Condition == "A")
+neutMean <- filter(mean_data, Condition == "N")
+
+ggplot(strMean, aes(x = run, y = HR, color = drinkGroup)) +
+  geom_smooth(size = 1.5) + geom_point()  + geom_line() +
+  scale_x_continuous(breaks = round(seq(min(strMean$run), max(strMean$run), by = 1), 1)) +
+  ggtitle("HR during Stress Cue")
+
+ggplot(alcMean, aes(x = run, y = HR, color = drinkGroup)) +
+  geom_smooth(size = 1.5) + geom_point()  + geom_line() +
+  scale_x_continuous(breaks = round(seq(min(alcMean$run), max(alcMean$run), by = 1), 1)) +
+  ggtitle("HR during Alcohol Cue")
+
+ggplot(neutMean, aes(x = run, y = HR, color = drinkGroup)) +
+  geom_smooth(size = 1.5) + geom_point()  + geom_line() +
+  scale_x_continuous(breaks = round(seq(min(neutMean$run), max(neutMean$run), by = 1), 1)) +
+  ggtitle("HR during Neutral Cue")
+
+```
+
+```{r}
+### Provocation vs Baseline
+lmHRPB <- lm(PB_HR ~ drinkGroup*Condition, hrv.runs)
+summary(lmHRPB)
+
+anovaHRPB <- aov(PB_HR ~ drinkGroup*Condition, data = hrv.runs)
+summary(anovaHRPB)
+
+tukeyHRPB <- TukeyHSD(anovaHRPB)
+tukeyHRPB
+plot(tukeyHRPB)
+
+```
+
+```{r}
+ggplot(hrv.runs, aes(x = Condition, y = PB_HR, color = drinkGroup)) +
+  geom_boxplot(outlier.color = "black") +
+  labs(title = "Provocation - Baseline HR", y = "Change in HR (bpm)")
+ggplot(hrv.runs, aes(x = Condition, y = PB_HR, color = Condition)) +
+  geom_boxplot(outlier.color = "black") +
+  labs(title = "Provocation - Baseline HR", y = "Change in HR (bpm)")
+ggplot(hrv.runs, aes(x = drinkGroup, y = PB_HR, color = drinkGroup)) +
+  geom_boxplot(outlier.color = "black") +
+  labs(title = "Provocation - Baseline HR", y = "Change in HR (bpm)")
+
+```
+
+# Run9 - Run4 HR
+
+```{r}
+lmflHR <- lm(flHR ~ drinkGroup*Condition, hrv.runs)
+summary(lmflHR)
+
+anovaflHR <- aov(flHR ~ drinkGroup*Condition, data = hrv.runs)
+summary(anovaflHR)
+
+tukeyflHR <- TukeyHSD(anovaflHR)
+tukeyflHR
+plot(tukeyflHR)
+```
+
+```{r}
+ggplot(hrv.runs, aes(x = Condition, y = flHR, color = drinkGroup)) +
+  geom_boxplot(outlier.color = "black") +
+  labs(title = "Run9 - Run4 HR", y = "Change in HR (bpm)")
+ggplot(hrv.runs, aes(x = Condition, y = flHR, color = Condition)) +
+  geom_boxplot(outlier.color = "black") +
+  labs(title = "Run9 - Run4 HR", y = "Change in HR (bpm)")
+ggplot(hrv.runs, aes(x = drinkGroup, y = flHR, color = drinkGroup)) +
+  geom_boxplot(outlier.color = "black") +
+  labs(title = "Run9 - Run4 HR", y = "Change in HR (bpm)")
+```
+
+
+
+
+
+
+### ANALYSIS OF HF ###
+
+```{r}
+lmHF <- lm(hf ~ drinkGroup*Condition, hrv.runs)
+summary(lmHF)
+
+anovaHF <- aov(hf ~ drinkGroup*Condition, data = hrv.runs)
+summary(anovaHF)
+
+tukeyHF <- TukeyHSD(anovaHF)
+tukeyHF
+plot(tukeyHF)
+```
+
+```{r}
+ggplot(hrv.runs, aes(x = Condition, y = hf, color = drinkGroup)) +
+  geom_boxplot(outlier.color = "black") +
+  labs(title = "HF by Condition and Drink Group", y = "HF")
+ggplot(hrv.runs, aes(x = Condition, y = hf, color = Condition)) +
+  geom_boxplot(outlier.color = "black") +
+  labs(title = "HF by Condition", y = "HF")
+ggplot(hrv.runs, aes(x = drinkGroup, y = hf, color = drinkGroup)) +
+  geom_boxplot(outlier.color = "black") +
+  labs(title = "HF by Drink Group", y = "HF")
+```
+
+```{r}
+meanHF <- group_by(hrv.runs, drinkGroup, Condition, run) %>%
+             summarise(hf = mean(hf, na.rm = TRUE))
+
+strHF <- filter(meanHF, Condition == "S")
+alcHF <- filter(meanHF, Condition == "A")
+neutHF <- filter(meanHF, Condition == "N")
+
+ggplot(strHF, aes(x = run, y = hf, color = drinkGroup)) +
+  geom_smooth(size = 1.5) + geom_point()  + geom_line() +
+  scale_x_continuous(breaks = round(seq(min(strHF$run), max(strHF$run), by = 1), 1)) +
+  ggtitle("High Frequency During Stress Cue")
+
+ggplot(alcHF, aes(x = run, y = hf, color = drinkGroup)) +
+  geom_smooth(size = 1.5) + geom_point()  + geom_line() +
+  scale_x_continuous(breaks = round(seq(min(alcHF$run), max(alcHF$run), by = 1), 1)) +
+  ggtitle("High Frequency During Alcohol Cue")
+
+ggplot(neutHF, aes(x = run, y = hf, color = drinkGroup)) +
+ geom_smooth(size = 1.5) + geom_point()  + geom_line() +
+  scale_x_continuous(breaks = round(seq(min(neutHF$run), max(neutHF$run), by = 1), 1)) +
+  ggtitle("High Frequency During Neutral Cue")
+
+```
+
+```{r}
+AD <- filter(hrv.runs, drinkGroup == "AD")
+LD <- filter(hrv.runs, drinkGroup == "LD")
+ggplot(AD, aes(x = run, y = hf, color = SubjectID)) +
+ geom_smooth(size = 0.5) + 
+  scale_x_continuous(breaks = round(seq(min(AD$run), max(AD$run), by = 1), 1)) +
+  ggtitle("High Frequency for each AD subject")
+ggplot(LD, aes(x = run, y = hf, color = SubjectID)) +
+ geom_smooth(size = 0.5) + 
+  scale_x_continuous(breaks = round(seq(min(LD$run), max(LD$run), by = 1), 1)) +
+  ggtitle("High Frequency for each LD subject")
+```
+
+
+
+```{r}
+# Provocation vs Baseline
+lmHFPB <- lm(PB_HF ~ drinkGroup*Condition, hrv.runs)
+summary(lmHFPB)
+
+anovaHFPB <- aov(PB_HF ~ drinkGroup*Condition, data = hrv.runs)
+summary(anovaHFPB)
+
+tukeyHFPB <- TukeyHSD(anovaHFPB)
+tukeyHFPB
+plot(tukeyHFPB)
+
+```
+
+```{r}
+ggplot(hrv.runs, aes(x = Condition, y = PB_HF, color = drinkGroup)) +
+  geom_boxplot(outlier.color = "black") +
+  labs(title = "Provocation - Baseline HF", y = "Change in HF (ms^2)")
+ggplot(hrv.runs, aes(x = Condition, y = PB_HF, color = Condition)) +
+  geom_boxplot(outlier.color = "black") +
+  labs(title = "Provocation - Baseline HF", y = "Change in HF (ms^2)")
+ggplot(hrv.runs, aes(x = drinkGroup, y = PB_HF, color = drinkGroup)) +
+  geom_boxplot(outlier.color = "black") +
+  labs(title = "Provocation - Baseline HF", y = "Change in HF (ms^2)")
+
+
+# ggplot(hrv.runs, aes(x = Condition, y = PB_HF, color = run_type)) +
+#   geom_boxplot(outlier.color = "black") +
+#   labs(title = "Provocation - Baseline HF", y = "Change in HF (ms^2)")
+```
+
+
+# Run9 - Run4 HF
+
+```{r}
+lmflHF <- lm(flHF ~ drinkGroup*Condition, hrv.runs)
+summary(lmflHF)
+
+anovaflHF <- aov(flHF ~ drinkGroup*Condition, data = hrv.runs)
+summary(anovaflHF)
+
+tukeyflHF <- TukeyHSD(anovaflHF)
+tukeyflHF
+plot(tukeyflHF)
+```
+
+```{r}
+ggplot(hrv.runs, aes(x = Condition, y = flHF, color = drinkGroup)) +
+  geom_boxplot(outlier.color = "black") +
+  labs(title = "Run9 - Run4 HF", y = "Change in HF (ms^2)")
+ggplot(hrv.runs, aes(x = Condition, y = flHF, color = Condition)) +
+  geom_boxplot(outlier.color = "black") +
+  labs(title = "Run9 - Run4 HF", y = "Change in HF (ms^2)")
+ggplot(hrv.runs, aes(x = drinkGroup, y = flHF, color = drinkGroup)) +
+  geom_boxplot(outlier.color = "black") +
+  labs(title = "Run9 - Run4 HF", y = "Change in HF (ms^2)")
+```
+
+
+### HF.... version
+
+```{r}
+lmHF <- lm(hf ~ drinkGroup*Condition, hrv.runs)
+summary(lmHF)
+
+anovaHF <- aov(hf ~ drinkGroup*Condition, data = hrv.runs)
+summary(anovaHF)
+
+tukeyHF <- TukeyHSD(anovaHF)
+tukeyHF
+plot(tukeyHF)
+```
+
+```{r}
+ggplot(hrv.runs, aes(x = Condition, y = hf, color = drinkGroup)) +
+  geom_boxplot(outlier.color = "black") +
+  labs(title = "HF by Condition", y = "HF")
+```
+
+```{r}
+meanHF <- group_by(hrv.runs, drinkGroup, Condition, run) %>%
+             summarise(hf.. = mean(hf.., na.rm = TRUE))
+
+strHF <- filter(meanHF, Condition == "S")
+alcHF <- filter(meanHF, Condition == "A")
+neutHF <- filter(meanHF, Condition == "N")
+
+ggplot(strHF, aes(x = run, y = hf.., color = drinkGroup)) +
+  geom_smooth(size = 1.5) + geom_point()  + geom_line() +
+  scale_x_continuous(breaks = round(seq(min(strHF$run), max(strHF$run), by = 1), 1)) +
+  ggtitle("High Frequency During Stress Cue")
+
+ggplot(alcHF, aes(x = run, y = hf.., color = drinkGroup)) +
+  geom_smooth(size = 1.5) + geom_point()  + geom_line() +
+  scale_x_continuous(breaks = round(seq(min(alcHF$run), max(alcHF$run), by = 1), 1)) +
+  ggtitle("High Frequency During Alcohol Cue")
+
+ggplot(neutHF, aes(x = run, y = hf.., color = drinkGroup)) +
+ geom_smooth(size = 1.5) + geom_point()  + geom_line() +
+  scale_x_continuous(breaks = round(seq(min(neutHF$run), max(neutHF$run), by = 1), 1)) +
+  ggtitle("High Frequency During Neutral Cue")
+
+```
+
+
+
+
+### ANALYSIS OF LF ###
+
+```{r}
+lmLF <- lm(lf ~ drinkGroup*Condition, hrv.runs)
+summary(lmLF)
+
+anovaLF <- aov(lf ~ drinkGroup*Condition, data = hrv.runs)
+summary(anovaLF)
+
+tukeyLF <- TukeyHSD(anovaLF)
+tukeyLF
+plot(tukeyLF)
+```
+
+```{r}
+ggplot(hrv.runs, aes(x = Condition, y = lf, color = drinkGroup)) +
+  geom_boxplot(outlier.color = "black") +
+  labs(title = "LF by Condition and Drink Group", y = "LF")
+ggplot(hrv.runs, aes(x = Condition, y = lf, color = Condition)) +
+  geom_boxplot(outlier.color = "black") +
+  labs(title = "LF by Condition", y = "LF")
+ggplot(hrv.runs, aes(x = drinkGroup, y = lf, color = drinkGroup)) +
+  geom_boxplot(outlier.color = "black") +
+  labs(title = "LF by Drink Group", y = "LF")
+```
+
+```{r}
+meanLF <- group_by(hrv.runs, drinkGroup, Condition, run) %>%
+             summarise(lf = mean(lf, na.rm = TRUE))
+
+strLF <- filter(meanLF, Condition == "S")
+alcLF <- filter(meanLF, Condition == "A")
+neutLF <- filter(meanLF, Condition == "N")
+
+ggplot(strLF, aes(x = run, y = lf, color = drinkGroup)) +
+  geom_smooth(size = 1.5) + geom_point()  + geom_line() +
+  scale_x_continuous(breaks = round(seq(min(strLF$run), max(strLF$run), by = 1), 1)) +
+  ggtitle("Low Frequency During Stress Cue")
+
+ggplot(alcLF, aes(x = run, y = lf, color = drinkGroup)) +
+  geom_smooth(size = 1.5) + geom_point()  + geom_line() +
+  scale_x_continuous(breaks = round(seq(min(alcLF$run), max(alcLF$run), by = 1), 1)) +
+  ggtitle("Low Frequency During Alcohol Cue")
+
+ggplot(neutLF, aes(x = run, y = lf, color = drinkGroup)) +
+  geom_smooth(size = 1.5) + geom_point()  + geom_line() +
+  scale_x_continuous(breaks = round(seq(min(neutLF$run), max(neutLF$run), by = 1), 1)) +
+  ggtitle("Low Frequency During Neutral Cue")
+
+```
+
+```{r}
+AD <- filter(hrv.runs, drinkGroup == "AD")
+LD <- filter(hrv.runs, drinkGroup == "LD")
+ggplot(AD, aes(x = run, y = lf, color = SubjectID)) +
+ geom_smooth(size = 0.5) + 
+  scale_x_continuous(breaks = round(seq(min(AD$run), max(AD$run), by = 1), 1)) +
+  ggtitle("Low Frequency for each AD subject")
+ggplot(LD, aes(x = run, y = lf, color = SubjectID)) +
+ geom_smooth(size = 0.5) + 
+  scale_x_continuous(breaks = round(seq(min(LD$run), max(LD$run), by = 1), 1)) +
+  ggtitle("Low Frequency for each LD subject")
+```
+
+```{r}
+# Provocation vs Baseline
+lmLFPB <- lm(PB_LF ~ drinkGroup*Condition, hrv.runs)
+summary(lmLFPB)
+
+anovaLFPB <- aov(PB_LF ~ drinkGroup*Condition, data = hrv.runs)
+summary(anovaLFPB)
+
+tukeyLFPB <- TukeyHSD(anovaLFPB)
+tukeyLFPB
+plot(tukeyLFPB)
+
+```
+
+```{r}
+ggplot(hrv.runs, aes(x = Condition, y = PB_LF, color = drinkGroup)) +
+  geom_boxplot(outlier.color = "black") +
+  labs(title = "Provocation - Baseline LF", y = "Change in LF (ms^2)")
+ggplot(hrv.runs, aes(x = Condition, y = PB_LF, color = Condition)) +
+  geom_boxplot(outlier.color = "black") +
+  labs(title = "Provocation - Baseline LF", y = "Change in LF (ms^2)")
+ggplot(hrv.runs, aes(x = drinkGroup, y = PB_LF, color = drinkGroup)) +
+  geom_boxplot(outlier.color = "black") +
+  labs(title = "Provocation - Baseline LF", y = "Change in LF (ms^2)")
+
+
+# ggplot(hrv.runs, aes(x = drinkGroup, y = PB_LF, color = run_type)) +
+#   geom_boxplot(outlier.color = "black") +
+#   labs(title = "Provocation - Baseline LF", y = "Change in LF (ms^2)")
+```
+
+# Run9 - Run4 LF
+
+```{r}
+lmflLF <- lm(flLF ~ drinkGroup*Condition, hrv.runs)
+summary(lmflLF)
+
+anovaflLF <- aov(flLF ~ drinkGroup*Condition, data = hrv.runs)
+summary(anovaflLF)
+
+tukeyflLF <- TukeyHSD(anovaflLF)
+tukeyflLF
+plot(tukeyflLF)
+```
+
+```{r}
+ggplot(hrv.runs, aes(x = Condition, y = flLF, color = drinkGroup)) +
+  geom_boxplot(outlier.color = "black") +
+  labs(title = "Run9 - Run4 LF", y = "Change in LF (ms^2)")
+ggplot(hrv.runs, aes(x = Condition, y = flLF, color = Condition)) +
+  geom_boxplot(outlier.color = "black") +
+  labs(title = "Run9 - Run4 LF", y = "Change in LF (ms^2)")
+ggplot(hrv.runs, aes(x = drinkGroup, y = flLF, color = drinkGroup)) +
+  geom_boxplot(outlier.color = "black") +
+  labs(title = "Run9 - Run4 LF", y = "Change in LF (ms^2)")
+```
+
+
+
+
+
+
+
+
+
+### ANALYSIS OF LF/HF RATIO ###
+
+```{r}
+lmLFHF <- lm(lfhf ~ drinkGroup*Condition, hrv.runs)
+summary(lmLFHF)
+
+anovaLFHF <- aov(lfhf ~ drinkGroup*Condition, data = hrv.runs)
+summary(anovaLFHF)
+
+tukeyLFHF <- TukeyHSD(anovaLFHF)
+tukeyLFHF
+plot(tukeyLFHF)
+```
+
+```{r}
+ggplot(hrv.runs, aes(x = Condition, y = lfhf, color = drinkGroup)) +
+  geom_boxplot(outlier.color = "black") +
+  labs(title = "LF/HF Ratio by Condition and Drink Group", y = "LF/HF")
+ggplot(hrv.runs, aes(x = Condition, y = lfhf, color = Condition)) +
+  geom_boxplot(outlier.color = "black") +
+  labs(title = "LF/HF Ratio by Condition", y = "LF/HF")
+ggplot(hrv.runs, aes(x = drinkGroup, y = lfhf, color = drinkGroup)) +
+  geom_boxplot(outlier.color = "black") +
+  labs(title = "LF/HF Ratio by Drink Group", y = "LF/HF")
+
+
+# ggplot(hrv.runs, aes(x = Condition, y = lfhf, color = run_type)) +
+#   geom_boxplot(outlier.color = "black") +
+#   labs(title = "LF/HF Ratio by Condition", y = "LF/HF")
+```
+
+
+```{r}
+meanLFHF <- group_by(hrv.runs, drinkGroup, Condition, run) %>%
+             summarise(lfhf = mean(lfhf, na.rm = TRUE))
+
+strLFHF <- filter(meanLFHF, Condition == "S")
+alcLFHF <- filter(meanLFHF, Condition == "A")
+neutLFHF <- filter(meanLFHF, Condition == "N")
+
+ggplot(strLFHF, aes(x = run, y = lfhf, color = drinkGroup)) +
+  geom_smooth(size = 1.5) + geom_point()  + geom_line() +
+  scale_x_continuous(breaks = round(seq(min(strLFHF$run), max(strLFHF$run), by = 1), 1)) +
+  ggtitle("LF/HF During Stress Cue")
+
+ggplot(alcLFHF, aes(x = run, y = lfhf, color = drinkGroup)) +
+  geom_smooth(size = 1.5) + geom_point()  + geom_line() +
+  scale_x_continuous(breaks = round(seq(min(alcLFHF$run), max(alcLFHF$run), by = 1), 1)) +
+  ggtitle("LF/HF During Alcohol Cue")
+
+ggplot(neutLFHF, aes(x = run, y = lfhf, color = drinkGroup)) +
+  geom_smooth(size = 1.5) + geom_point()  + geom_line() +
+  scale_x_continuous(breaks = round(seq(min(neutLFHF$run), max(neutLFHF$run), by = 1), 1)) +
+  ggtitle("LF/HF During Neutral Cue")
+```
+
+
+```{r}
+# Provocation vs Baseline
+lmLFHFPB <- lm(PB_LFHF ~ drinkGroup*Condition, hrv.runs)
+summary(lmLFHFPB)
+
+anovaLFHFPB <- aov(PB_LFHF ~ drinkGroup*Condition, data = hrv.runs)
+summary(anovaLFHFPB)
+
+tukeyLFHFPB <- TukeyHSD(anovaLFHFPB)
+tukeyLFHFPB
+plot(tukeyLFHFPB)
+
+```
+
+```{r}
+ggplot(hrv.runs, aes(x = Condition, y = PB_LFHF, color = drinkGroup)) +
+  geom_boxplot(outlier.color = "black") +
+  labs(title = "Provocation - Baseline LF/HF", y = "Change in LF/HF")
+ggplot(hrv.runs, aes(x = Condition, y = PB_LFHF, color = Condition)) +
+  geom_boxplot(outlier.color = "black") +
+  labs(title = "Provocation - Baseline LF/HF", y = "Change in LF/HF")
+ggplot(hrv.runs, aes(x = drinkGroup, y = PB_LFHF, color = drinkGroup)) +
+  geom_boxplot(outlier.color = "black") +
+  labs(title = "Provocation - Baseline LF/HF", y = "Change in LF/HF")
+```
+
+# Run9 - Run4 LF/HF
+
+```{r}
+lmflLFHF <- lm(flLFHF ~ drinkGroup*Condition, hrv.runs)
+summary(lmflLFHF)
+
+anovaflLFHF <- aov(flLFHF ~ drinkGroup*Condition, data = hrv.runs)
+summary(anovaflLFHF)
+
+tukeyflLFHF <- TukeyHSD(anovaflLFHF)
+tukeyflLFHF
+plot(tukeyflLFHF)
+```
+
+```{r}
+ggplot(hrv.runs, aes(x = Condition, y = flLFHF, color = drinkGroup)) +
+  geom_boxplot(outlier.color = "black") +
+  labs(title = "Run9 - Run4 LF/HF ratio", y = "Change in LF/HF ratio")
+ggplot(hrv.runs, aes(x = Condition, y = flLFHF, color = Condition)) +
+  geom_boxplot(outlier.color = "black") +
+  labs(title = "Run9 - Run4 LF/HF ratio", y = "Change in LF/HF ratio")
+ggplot(hrv.runs, aes(x = drinkGroup, y = flLFHF, color = drinkGroup)) +
+  geom_boxplot(outlier.color = "black") +
+  labs(title = "Run9 - Run4 LF/HF ratio", y = "Change in LF/HF ratio")
+```
+
+
+
+
+
+
+
+### ANALYSIS OF SDNN ###
+
+```{r}
+lmSDNN <- lm(SDNN ~ drinkGroup*Condition, hrv.runs)
+summary(lmSDNN)
+
+anovaSDNN <- aov(SDNN ~ drinkGroup*Condition, data = hrv.runs)
+summary(anovaSDNN)
+
+tukeySDNN <- TukeyHSD(anovaSDNN)
+tukeySDNN
+plot(tukeySDNN)
+```
+
+```{r}
+ggplot(hrv.runs, aes(x = Condition, y = SDNN, color = drinkGroup)) +
+  geom_boxplot(outlier.color = "black") +
+  labs(title = "SDNN by Condition and Drink Group", y = "SDNN")
+ggplot(hrv.runs, aes(x = Condition, y = SDNN, color = Condition)) +
+  geom_boxplot(outlier.color = "black") +
+  labs(title = "SDNN by Condition", y = "SDNN")
+ggplot(hrv.runs, aes(x = drinkGroup, y = SDNN, color = drinkGroup)) +
+  geom_boxplot(outlier.color = "black") +
+  labs(title = "SDNN by Drink Group", y = "SDNN")
+```
+
+```{r}
+meanSDNN <- group_by(hrv.runs, drinkGroup, Condition, run) %>%
+             summarise(SDNN = mean(SDNN, na.rm = TRUE))
+strSDNN <- filter(meanSDNN, Condition == "S")
+alcSDNN <- filter(meanSDNN, Condition == "A")
+neutSDNN <- filter(meanSDNN, Condition == "N")
+
+ggplot(strSDNN, aes(x = run, y = SDNN, color = drinkGroup)) +
+  geom_smooth() +
+  scale_x_continuous(breaks = round(seq(min(strSDNN$run), max(strSDNN$run), by = 1), 1)) +
+  ggtitle("SDNN during Stress Cue")
+
+ggplot(alcSDNN, aes(x = run, y = SDNN, color = drinkGroup)) +
+  geom_smooth() +
+  scale_x_continuous(breaks = round(seq(min(alcSDNN$run), max(alcSDNN$run), by = 1), 1)) +
+  ggtitle("SDNN during Alcohol Cue")
+
+ggplot(neutSDNN, aes(x = run, y = SDNN, color = drinkGroup)) +
+  geom_smooth() +
+  scale_x_continuous(breaks = round(seq(min(neutSDNN$run), max(neutSDNN$run), by = 1), 1)) +
+  ggtitle("SDNN during Neutral Cue")
+  
+
+```
+
+
+
+
+
+
+
+
+
+### ANALYSIS OF RMSSD ### 
+
+```{r}
+lmRMSSD <- lm(RMSSD ~ drinkGroup*Condition, hrv.runs)
+summary(lmRMSSD)
+
+anovaRMSSD <- aov(RMSSD ~ drinkGroup*Condition, data = hrv.runs)
+summary(anovaRMSSD)
+
+tukeyRMSSD <- TukeyHSD(anovaRMSSD)
+tukeyRMSSD
+plot(tukeyRMSSD)
+```
+
+```{r}
+ggplot(hrv.runs, aes(x = Condition, y = RMSSD, color = drinkGroup)) +
+  geom_boxplot(outlier.color = "black") +
+  labs(title = "RMSSD by Condition and Drink Group", y = "RMSSD")
+ggplot(hrv.runs, aes(x = Condition, y = RMSSD, color = Condition)) +
+  geom_boxplot(outlier.color = "black") +
+  labs(title = "RMSSD by Condition", y = "RMSSD")
+ggplot(hrv.runs, aes(x = drinkGroup, y = RMSSD, color = drinkGroup)) +
+  geom_boxplot(outlier.color = "black") +
+  labs(title = "RMSSD by Drink Group", y = "RMSSD")
+```
+
+```{r}
+meanRMSSD <- group_by(hrv.runs, drinkGroup, Condition, run) %>%
+             summarise(RMSSD = mean(RMSSD, na.rm = TRUE))
+
+strRMSSD <- filter(meanRMSSD, Condition == "S")
+alcRMSSD <- filter(meanRMSSD, Condition == "A")
+neutRMSSD <- filter(meanRMSSD, Condition == "N")
+
+ggplot(strRMSSD, aes(x = run, y = RMSSD, color = drinkGroup)) +
+  geom_smooth() +
+  scale_x_continuous(breaks = round(seq(min(strRMSSD$run), max(strRMSSD$run), by = 1), 1)) +
+  ggtitle("RMSSD During Stress Cue")
+
+ggplot(alcRMSSD, aes(x = run, y = RMSSD, color = drinkGroup)) +
+  geom_smooth() +
+  scale_x_continuous(breaks = round(seq(min(alcRMSSD$run), max(alcRMSSD$run), by = 1), 1)) +
+  ggtitle("RMSSD During Alcohol Cue")
+
+ggplot(neutRMSSD, aes(x = run, y = RMSSD, color = drinkGroup)) +
+  geom_smooth() +
+  scale_x_continuous(breaks = round(seq(min(neutRMSSD$run), max(neutRMSSD$run), by = 1), 1)) +
+  ggtitle("RMSSD During Neutral Cue")
+```
+
+
+
+
+
+
+
+
+### ANALYSIS OF Approximate Entropy
+
+```{r}
+lmApEn <- lm(S1_ApEn ~ drinkGroup*Condition, hrv.runs)
+summary(lmApEn)
+
+anovaApEn <- aov(S1_ApEn ~ drinkGroup*Condition, data = hrv.runs)
+summary(anovaApEn)
+
+tukeyApEn <- TukeyHSD(anovaApEn)
+tukeyApEn
+plot(tukeyApEn)
+
+```
+
+
+```{r}
+ggplot(hrv.runs, aes(x = Condition, y = S1_ApEn, color = drinkGroup)) +
+  geom_boxplot(outlier.color = "black") +
+  labs(title = "Approximate Entropy by Condition and Drink Group", y = "Approximate Entropy")
+ggplot(hrv.runs, aes(x = Condition, y = S1_ApEn, color = Condition)) +
+  geom_boxplot(outlier.color = "black") +
+  labs(title = "Approximate Entropy by Condition", y = "Approximate Entropy")
+ggplot(hrv.runs, aes(x = drinkGroup, y = S1_ApEn, color = drinkGroup)) +
+  geom_boxplot(outlier.color = "black") +
+  labs(title = "Approximate Entropy by Drink Group", y = "Approximate Entropy")
+```
+
+
+```{r}
+mean_data <- group_by(hrv.runs, drinkGroup, Condition, run) %>%
+             summarise(S1_ApEn = mean(S1_ApEn, na.rm = TRUE))
+strMean <- filter(mean_data, Condition == "S")
+alcMean <- filter(mean_data, Condition == "A")
+neutMean <- filter(mean_data, Condition == "N")
+
+ggplot(strMean, aes(x = run, y = S1_ApEn, color = drinkGroup)) +
+  geom_smooth() + 
+  scale_x_continuous(breaks = round(seq(min(strMean$run), max(strMean$run), by = 1), 1)) +
+  ggtitle("Approximate Entropy during Stress Cue")
+
+ggplot(alcMean, aes(x = run, y = S1_ApEn, color = drinkGroup)) +
+  geom_smooth() + 
+  scale_x_continuous(breaks = round(seq(min(alcMean$run), max(alcMean$run), by = 1), 1)) +
+  ggtitle("Approximate Entropy during Alcohol Cue")
+
+ggplot(neutMean, aes(x = run, y = S1_ApEn, color = drinkGroup)) +
+  geom_smooth() + 
+  scale_x_continuous(breaks = round(seq(min(neutMean$run), max(neutMean$run), by = 1), 1)) +
+  ggtitle("Approximate Entropy during Neutral Cue")
+
+```
+
+
+
+
+
+
+### ANALYSIS OF Sample Entropy
+
+```{r}
+lmSampEn <- lm(S1_SampEn ~ drinkGroup*Condition, hrv.runs)
+summary(lmSampEn)
+
+anovaSampEn <- aov(S1_SampEn ~ drinkGroup*Condition, data = hrv.runs)
+summary(anovaSampEn)
+
+tukeySampEn <- TukeyHSD(anovaSampEn)
+tukeySampEn
+plot(tukeySampEn)
+
+```
+
+```{r}
+ggplot(hrv.runs, aes(x = Condition, y = S1_SampEn, color = drinkGroup)) +
+  geom_boxplot(outlier.color = "black") +
+  labs(title = "Sample Entropy by Condition and Drink Group", y = "Sample Entropy")
+ggplot(hrv.runs, aes(x = Condition, y = S1_SampEn, color = Condition)) +
+  geom_boxplot(outlier.color = "black") +
+  labs(title = "Sample Entropy by Condition", y = "Sample Entropy")
+ggplot(hrv.runs, aes(x = drinkGroup, y = S1_SampEn, color = drinkGroup)) +
+  geom_boxplot(outlier.color = "black") +
+  labs(title = "Sample Entropy by Drink Group", y = "Sample Entropy")
+```
+
+```{r}
+mean_data <- group_by(hrv.runs, drinkGroup, Condition, run) %>%
+             summarise(S1_SampEn = mean(S1_SampEn, na.rm = TRUE))
+strMean <- filter(mean_data, Condition == "S")
+alcMean <- filter(mean_data, Condition == "A")
+neutMean <- filter(mean_data, Condition == "N")
+
+ggplot(strMean, aes(x = run, y = S1_SampEn, color = drinkGroup)) +
+  geom_smooth() + 
+  scale_x_continuous(breaks = round(seq(min(strMean$run), max(strMean$run), by = 1), 1)) +
+  ggtitle("Sample Entropy during Stress Cue")
+
+ggplot(alcMean, aes(x = run, y = S1_SampEn, color = drinkGroup)) +
+  geom_smooth() + 
+  scale_x_continuous(breaks = round(seq(min(alcMean$run), max(alcMean$run), by = 1), 1)) +
+  ggtitle("Sample Entropy during Alcohol Cue")
+
+ggplot(neutMean, aes(x = run, y = S1_SampEn, color = drinkGroup)) +
+  geom_smooth() + 
+  scale_x_continuous(breaks = round(seq(min(neutMean$run), max(neutMean$run), by = 1), 1)) +
+  ggtitle("Sample Entropy during Neutral Cue")
+
+```
+
+
+
+
+### Ratings graphs
+
+```{r}
+mean_data <- group_by(hrv.runs, drinkGroup, Condition, run) %>%
+             summarise(Stress = mean(Stress, na.rm = TRUE))
+strMean <- filter(mean_data, Condition == "S")
+alcMean <- filter(mean_data, Condition == "A")
+neutMean <- filter(mean_data, Condition == "N")
+
+ggplot(strMean, aes(x = run, y = Stress, color = drinkGroup)) +
+  geom_smooth() + geom_point()  + geom_line() +
+  scale_x_continuous(breaks = round(seq(min(strMean$run), max(strMean$run), by = 1), 1)) +
+  ggtitle("Stress Ratings during Stress Cue")
+
+ggplot(alcMean, aes(x = run, y = Stress, color = drinkGroup)) +
+  geom_smooth() + geom_point()  + geom_line() +
+  scale_x_continuous(breaks = round(seq(min(alcMean$run), max(alcMean$run), by = 1), 1)) +
+  ggtitle("Stress Ratings During Alcohol Cue")
+
+ggplot(neutMean, aes(x = run, y = Stress, color = drinkGroup)) +
+  geom_smooth() + geom_point()  + geom_line() +
+  scale_x_continuous(breaks = round(seq(min(neutMean$run), max(neutMean$run), by = 1), 1)) +
+  ggtitle("Stress Ratings During Neutral Cue")
+```
+
+
+```{r}
+mean_data <- group_by(hrv.runs, drinkGroup, Condition, run) %>%
+             summarise(Crav = mean(Crav, na.rm = TRUE))
+strMean <- filter(mean_data, Condition == "S")
+alcMean <- filter(mean_data, Condition == "A")
+neutMean <- filter(mean_data, Condition == "N")
+
+ggplot(strMean, aes(x = run, y = Crav, color = drinkGroup)) +
+  geom_smooth() + geom_point()  + geom_line() +
+  scale_x_continuous(breaks = round(seq(min(strMean$run), max(strMean$run), by = 1), 1)) +
+  ggtitle("Craving Ratings during Stress Cue")
+
+ggplot(alcMean, aes(x = run, y = Crav, color = drinkGroup)) +
+  geom_smooth() + geom_point()  + geom_line() +
+  scale_x_continuous(breaks = round(seq(min(alcMean$run), max(alcMean$run), by = 1), 1)) +
+  ggtitle("Craving Ratings During Alcohol Cue")
+
+ggplot(neutMean, aes(x = run, y = Crav, color = drinkGroup)) +
+  geom_smooth() + geom_point()  + geom_line() +
+  scale_x_continuous(breaks = round(seq(min(neutMean$run), max(neutMean$run), by = 1), 1)) +
+  ggtitle("Craving Ratings During Neutral Cue")
+```
+
+```{r}
+mean_data <- group_by(hrv.runs, drinkGroup, Condition, run) %>%
+             summarise(Arous = mean(Arous, na.rm = TRUE))
+strMean <- filter(mean_data, Condition == "S")
+alcMean <- filter(mean_data, Condition == "A")
+neutMean <- filter(mean_data, Condition == "N")
+
+ggplot(strMean, aes(x = run, y = Arous, color = drinkGroup)) +
+  geom_smooth() + geom_point()  + geom_line() +
+  scale_x_continuous(breaks = round(seq(min(strMean$run), max(strMean$run), by = 1), 1)) +
+  ggtitle("Arousal Ratings during Stress Cue")
+
+ggplot(alcMean, aes(x = run, y = Arous, color = drinkGroup)) +
+  geom_smooth() + geom_point()  + geom_line() +
+  scale_x_continuous(breaks = round(seq(min(alcMean$run), max(alcMean$run), by = 1), 1)) +
+  ggtitle("Arousal Ratings During Alcohol Cue")
+
+ggplot(neutMean, aes(x = run, y = Arous, color = drinkGroup)) +
+  geom_smooth() + geom_point()  + geom_line() +
+  scale_x_continuous(breaks = round(seq(min(neutMean$run), max(neutMean$run), by = 1), 1)) +
+  ggtitle("Arousal Ratings During Neutral Cue")
+```
+
+```{r}
+mean_data <- group_by(hrv.runs, drinkGroup, Condition, run) %>%
+             summarise(Focus = mean(Focus, na.rm = TRUE))
+strMean <- filter(mean_data, Condition == "S")
+alcMean <- filter(mean_data, Condition == "A")
+neutMean <- filter(mean_data, Condition == "N")
+
+ggplot(strMean, aes(x = run, y = Focus, color = drinkGroup)) +
+  geom_smooth() + geom_point()  + geom_line() +
+  scale_x_continuous(breaks = round(seq(min(strMean$run), max(strMean$run), by = 1), 1)) +
+  ggtitle("Focus Ratings during Stress Cue")
+
+ggplot(alcMean, aes(x = run, y = Focus, color = drinkGroup)) +
+  geom_smooth() + geom_point()  + geom_line() +
+  scale_x_continuous(breaks = round(seq(min(alcMean$run), max(alcMean$run), by = 1), 1)) +
+  ggtitle("Focus Ratings During Alcohol Cue")
+
+ggplot(neutMean, aes(x = run, y = Focus, color = drinkGroup)) +
+  geom_smooth() + geom_point()  + geom_line() +
+  scale_x_continuous(breaks = round(seq(min(neutMean$run), max(neutMean$run), by = 1), 1)) +
+  ggtitle("Focus Ratings During Neutral Cue")
+```
+
+
+
+

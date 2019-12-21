@@ -1,0 +1,394 @@
+---
+title: "KubiosPreprocessing"
+author: "Ryan Douglas"
+date: "4/11/2019"
+output: html_document
+---
+### Takes output of Kubios_MergeNew.R script and runorder_extraction.Rmd
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+library(readxl)
+```
+
+```{r}
+hrv <- read.csv("/Users/DyanRouglas/Documents/Yale_data/Kubios/Kubios_merged.csv")
+Eprime <- read.csv("/Users/DyanRouglas/Documents/Yale_data/Eprime/Eprime_RunOrder.csv")
+
+```
+
+### Get Scan Type
+```{r}
+directory <- "/Volumes/data-CC1486-Psychiatry/Physio_MM"
+hr_dir <- dir(directory)
+
+hrv$Scan <- NA
+for (i in 1:nrow(hrv)) {
+  scan <- as.character(hrv$ScanID[i])
+  file <- as.character(hrv$FileName[i])
+  file <- substr(file, 0, 15)
+  #print(paste0("Processing: ", scan, "    File: ", file))
+  
+  scan_dir <- dir(paste0(directory, '/', scan))
+  
+  index <- grep(file, scan_dir)
+  if (is_empty(index)) {
+    print(paste0("Missing files for scan: ", scan, " file: ", file ))
+    next
+  }
+  
+  target <- scan_dir[index]
+  target <- target[grep("AcquisitionInfo", target)]
+  if (is_empty(target)) {
+    hrv$Scan[i] <- "BOLD"
+    next
+  }
+  
+  if (grepl("rest", target)) {
+    hrv$Scan[i] <- "RESTING"
+  } else {
+    hrv$Scan[i] <- "BOLD"
+  }
+  
+}
+```
+
+### Get Condition run order
+```{r}
+hrv$Condition <- NA
+count <- 0 #keep track of irregular scans
+countEprime <- 0 #Keep track of missing Eprime
+spot <- "NA"
+
+for (i in 1:nrow(hrv)) {
+  if (spot == as.character(hrv$ScanID[i])) { #don't process same scan ID twice
+    next
+  }
+  
+  x <- grep(as.character(hrv$Eprime[i]), Eprime$EprimeID)
+  
+  if (is_empty(x)) { 
+    countEprime <- countEprime + 1
+    next
+  }
+
+  runOrder <- as.character(Eprime$RunOrder_eprime[x])
+  run1 <- substr(runOrder, 1, 1)
+  run2 <- substr(runOrder, 2, 2)
+  run3 <- substr(runOrder, 3, 3)
+  
+  y <- grep(as.character(hrv$ScanID[i]), hrv$ScanID) 
+  
+  subset <- hrv[y,]
+  count_rest <- grep("RESTING", subset$Scan)
+  
+  if (length(count_rest) == 4) {
+    firstBold <- grep("BOLD", subset$Scan)[1]
+    
+    offset <- 0
+    while (firstBold > count_rest[1]) {
+      offset <- offset + 1
+      count_rest <- count_rest[-1]
+    }
+    if (subset$Scan[nrow(subset)] != "RESTING") { # If no final resting scan, make final BOLD run as back stop
+      count_rest[length(count_rest) + 1] <- nrow(subset)
+    }
+    
+    subset$Condition[(firstBold-offset):count_rest[1]] <- rep(run1, length(subset$Condition[(firstBold-offset):count_rest[1]]))
+    subset$Condition[(count_rest[1] +1):count_rest[2]] <- rep(run2, length(subset$Condition[(count_rest[1] +1):count_rest[2]]))
+    subset$Condition[(count_rest[2] +1):count_rest[3]] <- rep(run3, length(subset$Condition[(count_rest[2] +1):count_rest[3]]))
+  } else if (length(count_rest) == 3) { #if standard MM scan or short scan with 3 resting scans
+
+    subset$Condition[1:count_rest[1]] <- rep(run1, length(subset$Condition[1:count_rest[1]]))
+    subset$Condition[(count_rest[1] +1):count_rest[2]] <- rep(run2, length(subset$Condition[(count_rest[1] +1):count_rest[2]]))
+    subset$Condition[(count_rest[2] +1):count_rest[3]] <- rep(run3, length(subset$Condition[(count_rest[2] +1):count_rest[3]]))
+      
+  } else if (length(count_rest) == 5) { #if standard MMK scan with 5 resting scans
+    
+    subset$Condition[count_rest[1]:count_rest[3]] <- rep(run1, length(subset$Condition[count_rest[1]:count_rest[3]]))
+    subset$Condition[(count_rest[3] +1):count_rest[4]] <- rep(run2, length(subset$Condition[(count_rest[3] +1):count_rest[4]]))
+    subset$Condition[(count_rest[4] +1):count_rest[5]] <- rep(run3, length(subset$Condition[(count_rest[4] +1):count_rest[5]]))
+    
+  } else {
+    #irregular, enter runorder manually
+    count <- count + 1 #keep track of number of irregular scans
+    next
+
+  }
+  
+  increment <- 0
+  for (s in 1:nrow(subset)) {
+    hrv$Condition[i + increment] <- subset$Condition[s] #Place runorder into correct spot in data frame
+    increment <- increment + 1
+  }
+
+  spot <- as.character(hrv$ScanID[i])
+}
+
+```
+
+```{r}
+### Manually enter remaining run order if necessary
+write.csv(hrv, file = "/Users/DyanRouglas/Documents/Yale_data/Kubios/Kubios_unfinished.csv", row.names = FALSE)
+```
+
+```{r}
+### Re upload data set with manually entered missing run order
+hrv <- read.csv("/Users/DyanRouglas/Documents/Yale_data/Kubios/Kubios_unfinished.csv", stringsAsFactors = FALSE)
+```
+
+### Get Scan Ratings
+```{r}
+proj_dir <- "/Volumes/727k"
+
+eprime_predir <- paste0(proj_dir, "/Multi Modal/fMRI_scan/fMRI/Eprime Task Files/Baseline/")
+eprime_postdir <- paste0(proj_dir, "/Multi Modal/fMRI_scan/fMRI/Eprime Task Files/Post/")
+
+subj_use <- data.frame(scan_id = unique(hrv$ScanID),
+                       eprime_id = rep(NA, length(unique(hrv$ScanID))),
+                       stringsAsFactors = FALSE)
+for (i in 1:nrow(subj_use)) {
+  ### use first in list of indexes
+  index <- grep(subj_use$scan_id[i], hrv$ScanID)
+  index <- index[1]
+  ### save scanID for comparison
+  scan <- hrv$ScanID[index]
+  ### if equal to NA, add 1 until not NA
+  while (hrv$Eprime[index] == "NA") {
+    index <- index + 1
+  }
+  ### ensure that still on correct subject
+  if (hrv$ScanID[index] != scan) {
+    next
+  }
+  
+  subj_use$eprime_id[i] <- hrv$Eprime[index]
+}
+subj_use <- na.omit(subj_use)
+
+
+nSubj <- dim(subj_use)[1]
+
+# define sequence of scans, ratings
+run_seq <- c('NA', rep('gray',3), 'Stim1', 'Stim2', 'Stim3', 'Stim4', 'Stim5', 'Stim6', 'NA')
+rat_seq <- c('Pre', 'Run1', 'Run2', 'Run3', 'Run4', 'Run5', 'Run6', 'Run7', 'Run8', 'Run9', 'Post')
+
+##### Loop through each subject, get eprime info #####
+for (s in 1:nSubj)
+{
+  
+  sub <- subj_use$eprime_id[s]
+  if (sub == "1063") {
+    next
+  }
+  scan_id <- subj_use$scan_id[s]
+  
+  # read in eprime file -- check both baseline and post scan folders
+  if(dir.exists(paste0(eprime_postdir, sub))) {
+    eprime_dat <- read_excel(paste0(eprime_postdir, sub, "/", sub, "_merged.xlsx"))
+  } else {
+    eprime_dat <- read_excel(paste0(eprime_predir, sub, "/", sub, "_merged.xlsx"))
+  }
+  
+  # define sequence of scans (alc/neut/str)
+  run1 <- grep("1", eprime_dat$Session)
+  run1 <- eprime_dat$Condi[run1[10]]
+  
+  run2 <- grep("2", eprime_dat$Session)
+  run2 <- eprime_dat$Condi[run2[10]]
+  
+  run3 <- grep("3", eprime_dat$Session)
+  run3 <- eprime_dat$Condi[run3[10]]
+  
+  conds <- c(run1, run2, run3)
+  
+  # get pre/post scan ratings
+  arous_pre <- c(subset(eprime_dat, `Procedure[Block]`=='ArousalPre')$Arouse1Choice)
+  stress_pre <- c(subset(eprime_dat, `Procedure[Block]`=='StressPre')$Stress1Choice)
+  crav_pre <- c(subset(eprime_dat, `Procedure[Block]`=='CravPre')$Craving1Choice)
+  mood_pre <- c(subset(eprime_dat, `Procedure[Block]`=='MoodPre')$Like1Choice)
+  
+  arous_post <- c(subset(eprime_dat, `Procedure[Trial]`=='ArousPost')$Arouse2Choice)
+  stress_post <- c(subset(eprime_dat, `Procedure[Trial]`=='StressPost')$Stress2Choice)
+  crav_post <- c(subset(eprime_dat, `Procedure[Trial]`=='CravPost')$Craving2Choice)
+  mood_post <- c(subset(eprime_dat, `Procedure[Trial]`=='MoodPost')$Like2Choice)
+  
+  # get within scan ratings, separtely for each scan type (alc/neut/str)
+  for (cnum in c(1:length(conds))) {
+    cname <- conds[cnum]
+    stress_scan <- subset(eprime_dat, Condi==cname & `Procedure[LogLevel5]`=='Stress')$StressSlideChoice
+    arous_scan <- subset(eprime_dat, Condi==cname & `Procedure[LogLevel5]`=='Arousal')$ArouSlideChoice
+    crav_scan <- subset(eprime_dat, Condi==cname & `Procedure[LogLevel5]`=='Craving')$CravSlideChoice
+    focus_scan <- subset(eprime_dat, Condi==cname & `Procedure[LogLevel5]`=='Focus')$FocusSlideChoice
+    
+    # for incomplete scans
+    if (length(stress_scan)==1) {
+      stress_scan <- rep(NA, 9)
+      arous_scan <- rep(NA, 9)
+      crav_scan <- rep(NA, 9)
+      focus_scan <- rep(NA, 9)
+    }
+    
+    num_obs <- sum(2 + length(stress_scan))
+    
+    # create dataframe to save out info per condition
+    cond_dat <- data.frame(ScanID = rep(scan_id, num_obs), Eprime_ID = rep(sub, num_obs),
+                           Task = rep(cname, num_obs), 
+                           Task_num = rep(cnum, num_obs), Scan = rat_seq[c(1:num_obs)], 
+                           Stim = run_seq[c(1:num_obs)], 
+                           Crav = c(crav_pre[cnum], crav_scan, crav_post[cnum]),
+                           Like = c(mood_pre[cnum], rep(NA, (num_obs-2)), mood_post[cnum]), 
+                           Arous = c(arous_pre[cnum], arous_scan, arous_post[cnum]),
+                           Stress = c(stress_pre[cnum], stress_scan, stress_post[cnum]),
+                           Focus = c('NA', focus_scan, 'NA'), 
+                           stringsAsFactors = FALSE)
+    
+    # merge across conditions within subject
+    if (cnum==1) {
+      rating_sub <- cond_dat
+    } else {
+      rating_sub <- rbind(rating_sub, cond_dat)
+    }
+  } # condition
+  
+  # merge across subjects
+  if (s == 1) {
+    rating_grp <- rating_sub
+  } else {
+    rating_grp <- rbind(rating_grp, rating_sub)
+  }
+  
+  print(paste0("Finished retrieving scan ratings for ", scan_id))
+  
+} # subjects
+
+
+### Add ratings to HRV data frame
+count = 1
+numSkip <- 0
+for (i in 1:nrow(hrv)) {
+  if (count > 1 && hrv$ScanID[i] %in% hrv_new$ScanID) {
+    next
+  }
+  
+  scan <- as.character(hrv$ScanID[i])
+  subjectPre <- filter(hrv, ScanID == scan)
+  
+  if (length(grep(TRUE, is.na(subjectPre$Condition))) == nrow(subjectPre)) {
+    emptydf <- data.frame(ScanID = character(nrow(subjectPre)), Eprime_ID = character(nrow(subjectPre)),
+                            Task = character(nrow(subjectPre)), Task_num = character(nrow(subjectPre)),
+                            Scan = character(nrow(subjectPre)), Stim = character(nrow(subjectPre)),
+                            Crav = character(nrow(subjectPre)), Like = character(nrow(subjectPre)),
+                            Arous = character(nrow(subjectPre)), Stress = character(nrow(subjectPre)),
+                            Focus = character(nrow(subjectPre)))
+    subjectPre <- cbind(subjectPre, emptydf)
+     hrv_new <- rbind(hrv_new, subjectPre)
+    next
+  }
+  
+  numSkip <- numSkip + length(grep(TRUE, is.na(subjectPre$Condition)))
+  subject <- filter(subjectPre, Condition != "NA")
+  if (nrow(subject) == 0) {
+    next
+  }
+  subjectRatings <- filter(rating_grp, ScanID == scan)
+  
+  # Divide each subject by condition
+  condition <- unique(subject$Condition)
+  if (condition[1] == "NA" && length(condition) <= 1) {
+    numSkip = numSkip + nrow(subject)
+    next
+  }
+  
+  conditionRatings <- unique(subjectRatings$Task)
+  cond1 <- filter(subject, Condition == condition[1])
+  cond2 <- filter(subject, Condition == condition[2])
+  cond3 <- filter(subject, Condition == condition[3])
+  numSkip <- numSkip + (nrow(subject) - (nrow(cond1) + nrow(cond2) + nrow(cond3)))
+
+  cond1Ratings <- filter(subjectRatings, Task == conditionRatings[1])
+  cond2Ratings <- filter(subjectRatings, Task == conditionRatings[2])
+  cond3Ratings <- filter(subjectRatings, Task == conditionRatings[3])
+  
+  cond <- list(cond1, cond2, cond3)
+  condRatings <- list(cond1Ratings, cond2Ratings, cond3Ratings)
+  
+  for (s in 1:length(cond)) {
+    if (nrow(cond[[s]]) == 0) {
+      next
+    }
+    # If no ratings for subject, bind to empty data frame 
+    if (nrow(condRatings[[s]]) == 0) {
+      emptydf <- data.frame(ScanID = character(nrow(cond[[s]])), Eprime_ID = character(nrow(cond[[s]])),
+                            Task = character(nrow(cond[[s]])), Task_num = character(nrow(cond[[s]])),
+                            Scan = character(nrow(cond[[s]])), Stim = character(nrow(cond[[s]])),
+                            Crav = character(nrow(cond[[s]])), Like = character(nrow(cond[[s]])),
+                            Arous = character(nrow(cond[[s]])), Stress = character(nrow(cond[[s]])),
+                            Focus = character(nrow(cond[[s]])))
+      cond[[s]] <- cbind(cond[[s]], emptydf)
+      next
+    }
+    # Remove rows to make even length in order to combine
+    if (nrow(cond[[s]]) != nrow(condRatings[[s]])) {
+      diff <- nrow(condRatings[[s]]) - nrow(cond[[s]])
+      if (diff < 0) {
+        cond[[s]] <- cond[[s]][-(1:abs(diff)),]
+        # while (diff < 0) {
+        #   condRatings[[s]] <- rbind(condRatings[[s]], rep(NA, ncol(condRatings[[s]])))
+        #   diff <- diff + 1
+        # }
+        cond[[s]] <- cbind(cond[[s]], condRatings[[s]])
+        numSkip <- numSkip + abs(diff)
+      } else {
+        # while (diff > 0) {
+        #   cond[[s]] <- rbind(cond[[s]], rep(NA, ncol(cond[[s]])))
+        #   diff <- diff - 1
+        #   numSkip <- numSkip - 1
+        # }
+        condRatings[[s]] <- condRatings[[s]][-(1:diff),]
+        cond[[s]] <- cbind(cond[[s]], condRatings[[s]])
+      }
+      
+    } else {
+      cond[[s]] <- cbind(cond[[s]], condRatings[[s]])
+    }
+    
+  }
+  
+  
+  # Recombine into single subject
+  subject_full <- rbind(cond[[1]], cond[[2]], cond[[3]])
+  if (count == 1) {
+    hrv_new <- subject_full
+  } else {
+    hrv_new <- rbind(hrv_new, subject_full)
+  }
+  count = count + 1
+}
+
+if ((nrow(hrv) - nrow(hrv_new)) == numSkip) {
+  print("Difference in row numbers accounted for") 
+} else {
+  print("Discrepency in row numbers")
+}
+
+# For Debugging
+
+# for (i in 1:nrow(hrv_new)) {
+#   if (hrv$ScanID[i] != hrv_new$ScanID[i]) {
+#     if (hrv_new[i,3] == "pb8150") next
+#     print(hrv_new$ScanID[i])
+#     break
+#   }
+# }
+```
+
+
+```{r}
+write.csv(hrv_new, file = "/Users/DyanRouglas/Documents/Yale_data/Kubios/Kubios_final.csv", row.names = FALSE)
+```
+

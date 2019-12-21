@@ -1,0 +1,103 @@
+---
+title: "RemoveKubiosOutliers"
+author: "Ryan Douglas"
+date: "8/28/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+
+hrv <- read.csv("/Users/DyanRouglas/Documents/Yale_data/Kubios/Kubios_final.csv", stringsAsFactors = FALSE)
+
+# Checks if x is an outlier
+# sd = standard deviation for given data set
+# avg = mean of given data set
+# numSD = number of standard deviations to be considered an outlier. 2 by default
+isOutlier <- function(x, sd, avg, numSD = 2) {
+  sd <- sd*numSD
+  
+  if (x >= (sd + avg) | x <= (avg - sd)) {
+    return(TRUE) 
+  } else {
+    return(FALSE)
+  }
+}
+
+# If value is an outlier, replaces it with NULL
+# sd = standard deviation for given data set
+# avg = mean of given data set
+# numSD = number of standard deviations to be considered an outlier. 2 by default
+labelOutlier <- function(x, sd, avg, numSD = 2) {
+  if (isOutlier(x, sd, avg, numSD)) {
+    return(NA)
+  } else {
+    return(x)
+  }
+}
+
+dontInclude <- c('S1_VLFpeak_AR..Hz.', 'S1_LFpeak_AR..Hz.', 'S1_HFpeak_AR..Hz.')
+```
+
+```{r}
+varNames <- colnames(hrv)
+spot <- grep("S1_Mean.RR", varNames)
+varNames <- varNames[spot:length(varNames)]
+
+checkedScan <- ""
+for (i in 1:length(varNames)) {
+  var <- varNames[i]
+  if (var %in% dontInclude) next
+  colIndex <- grep(var, colnames(hrv), fixed = TRUE)
+  for (j in 1:nrow(hrv)) {
+    scan <- as.character(hrv$ScanID[j])
+    if (scan == checkedScan) next
+    subject <- filter(hrv, ScanID == scan)
+    
+    condition <- unique(subject$Condition)
+    cond1 <- filter(subject, Condition == condition[1])
+    cond2 <- filter(subject, Condition == condition[2])
+    cond3 <- filter(subject, Condition == condition[3])
+    
+    cond <- list(cond1, cond2, cond3)
+    
+    for (s in length(cond)) {
+      # Only consider conditions with more than 3 rows of complete data (NAs removed)
+      if (nrow(cond[[s]]) < 3 | 
+          (nrow(cond[[s]]) - length(grep(TRUE, is.na(cond[[s]][,colIndex])))) < 2 ) {
+        next
+      } 
+
+      SD <- sd(as.numeric(cond[[s]][,colIndex]), na.rm = TRUE)
+      avg <- mean(as.numeric(cond[[s]][,colIndex]), na.rm = TRUE)
+      
+      for (t in 1:nrow(cond[[s]])) {
+        
+        x <- as.numeric(cond[[s]][t, colIndex])
+        if (is.na(x)) next
+        cond[[s]][t, colIndex] <- labelOutlier(x, SD, avg)
+      }
+      
+    }
+    
+    # Recombine into single subject and add back to dataframe
+    subject_full <- rbind(cond[[1]], cond[[2]], cond[[3]])
+    hrv[grep(scan, hrv$ScanID), colIndex] <- subject_full[, colIndex]
+    
+    checkedScan <- scan
+  }
+  
+}
+
+
+
+```
+
+```{r}
+write.csv(hrv, "/Users/DyanRouglas/Documents/Yale_data/Kubios/KubiosOutliersRemoved.csv", row.names = FALSE)
+```
+
