@@ -62,7 +62,7 @@ for (i in 1:nrow(hrv)) {
 }
 ```
 
-### Add Seungju's drinking information (Need to add AD drinking information)
+### Add drinking information (Need to add AD drinking information)
 #```{r}
 ### Need to figure out way to add more specific drinking information, while including AD individuals
 # hrv$drinkGroup <- NA
