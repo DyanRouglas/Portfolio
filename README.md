@@ -10,4 +10,4 @@ This repository contains a sampling of projects and scripts that I have worked o
   1. Order Manager: a Relational Database Management System for managing products, product inventory, and customer information for an online store, built using Apache Derby in Java.
   
 #### Scripts
-  A sampling of R and MATLAB scripts, some more ad hoc in nature than others, primarily written with the purpose of manipulating data or putting datasets together.
+  A sampling of R and MATLAB scripts, some more ad hoc in nature than others, primarily written with the purpose of manipulating data or putting datasets together. Unfortunately, the data used in most of these scripts cannot be provided as it is protected by HIPAA.
