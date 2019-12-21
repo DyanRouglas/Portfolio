@@ -1,3 +1,6 @@
+% This script loops through raw ECG data for each subject, runs a bandpass filter
+% over each raw signal, and outputs the filtered signal into a new directory
+
 directory = '/Volumes/data-CC1486-Psychiatry/Physio_MM';
 output = '/Volumes/data-CC1486-Psychiatry/';
 folders = dir(directory);
