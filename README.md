@@ -4,7 +4,6 @@ This repository contains a sampling of projects and scripts that I have worked o
 #### Machine Learning
   1. Classifying Loan Default: using a logistic regression model with L2 regularization and stochastic gradient descent built from scratch in Ruby to classify if an individual will default on a loan based on insufficient or non-existent credit history.
   2. Classifying Wildfires: using various machine learning models from sci-kit learn to classify the size of wildfires based on duration, location, and cause of the fire and to classify the cause of a fire based on the duration, location and size of a fire. 
-  3. Classifying alcohol use disorder (AUD): will be uploaded soon
 
 #### Database Management
   1. Order Manager: a Relational Database Management System for managing products, product inventory, and customer information for an online store, built using Apache Derby in Java.
