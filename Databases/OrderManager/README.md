@@ -107,7 +107,7 @@ DATA QUERY LANGUAGE (DQL):
 UTILITY FUNCTIONS
 -----------------
 - **StoredFunctions Class**
-This Java Class contains the Java fucntions of the stored function in the check constaints mentioned above, and the stored procedures that are called by the triggers mentioned above.
+This Java Class contains the Java functions of the stored function in the check constaints mentioned above, and the stored procedures that are called by the triggers mentioned above.
 
 - **PrintUtilities**
 This Java Class contains print functions to print the tables in a uniformely formatted manner
